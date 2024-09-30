@@ -2,8 +2,6 @@
 
 This project provides a FastAPI-based server implementation for handling both global and local structured searches using GraphRAG.
 
-
-
 ## Installation
 
 Clone the repository and install the required dependencies using the following commands:
@@ -27,6 +25,7 @@ pip install -r requirements.txt
 ```
 
 ## Usage
+
 ```
 python api.py
 ```
@@ -38,6 +37,13 @@ You can also use the interface at [GraphRAG Visualizer](https://noworneverev.git
 ![search](static/image.png)
 
 ## API Endpoints
+
 - `/search/global`: Perform a global search using GraphRAG.
 - `/search/local`: Perform a local search using GraphRAG.
 - `/status`: Check if the server is up and running.
+
+## Deployment
+
+If deploying to caprover, the artifacts directory must be mapped as a volume, and the parquet files should be copied into place on the host machine. This is because the parquet files are not in git, and hence not deployable via caprover deploy.
+
+e.g. /app/artifacts mapped to /home/ubuntu/graphrag-api/artifacts/iwsr on the host machine.
