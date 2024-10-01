@@ -1,3 +1,4 @@
+
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,6 +39,32 @@ from constants import (
     TEXT_UNIT_TABLE,
 )
 
+import os
+from graphrag.query.llm.oai import base
+
+def monkey_patch_openai():
+    original_openai = base.OpenAI
+    original_async_openai = base.AsyncOpenAI
+
+    def patched_openai(*args, **kwargs):
+        kwargs['default_headers'] = {
+            "velvet-auth": os.environ.get("VELVET_API_KEY"),
+        }
+        return original_openai(*args, **kwargs)
+
+    def patched_async_openai(*args, **kwargs):
+        kwargs['default_headers'] = {
+            "velvet-auth": os.environ.get("VELVET_API_KEY"),
+        }
+        return original_async_openai(*args, **kwargs)
+
+    base.OpenAI = patched_openai
+    base.AsyncOpenAI = patched_async_openai
+
+if os.environ.get("VELVET_API_KEY"):
+    print("Monkey patching OpenAI to proxy requests through Velvet")
+    monkey_patch_openai()
+
 _ = load_dotenv()
 
 settings = load_settings_from_yaml("settings.yml")
@@ -61,6 +88,7 @@ claim_extraction_enabled = settings.GRAPHRAG_CLAIM_EXTRACTION_ENABLED
 
 llm = ChatOpenAI(
     api_key=api_key,
+    api_base="https://gateway.usevelvet.com/api/openai/v1/" if os.environ.get("VELVET_API_KEY") else None,
     model=llm_model,
     api_type=OpenaiApiType.OpenAI,
     max_retries=20,
