@@ -7,6 +7,7 @@ import tiktoken
 
 from graphrag.query.structured_search.global_search.search import GlobalSearch
 from graphrag.query.structured_search.local_search.search import LocalSearch
+from graphrag.query.question_gen.local_gen import LocalQuestionGen
 from graphrag.query.llm.oai.chat_openai import ChatOpenAI
 from graphrag.query.llm.oai.typing import OpenaiApiType
 from graphrag.query.structured_search.global_search.community_context import GlobalCommunityContext
@@ -120,24 +121,11 @@ def setup_global_search():
         entities=entities,
         token_encoder=token_encoder,
     )
-
-    search_engine = GlobalSearch(
-        llm=llm,
-        context_builder=context_builder,
-        token_encoder=token_encoder,
-        max_data_tokens=12_000,
-        map_llm_params={
-            "max_tokens": 1000,
-            "temperature": 0.0,
-            "response_format": {"type": "json_object"},
-        },
-        reduce_llm_params={
+    reduce_llm_params={
             "max_tokens": 2000,
             "temperature": 0.0,
-        },
-        allow_general_knowledge=False,
-        json_mode=True,
-        context_builder_params={
+        }
+    context_builder_params={
             "use_community_summary": False,
             "shuffle_data": True,
             "include_community_rank": True,
@@ -148,11 +136,34 @@ def setup_global_search():
             "normalize_community_weight": True,
             "max_tokens": 12_000,
             "context_name": "Reports",
+        }
+    search_engine = GlobalSearch(
+        llm=llm,
+        context_builder=context_builder,
+        token_encoder=token_encoder,
+        max_data_tokens=12_000,
+        map_llm_params={
+            "max_tokens": 1000,
+            "temperature": 0.0,
+            "response_format": {"type": "json_object"},
         },
+        reduce_llm_params=reduce_llm_params,
+        allow_general_knowledge=False,
+        json_mode=True,
+        context_builder_params=context_builder_params,
         concurrent_coroutines=32,
         response_type="single paragraph",
     )
-    return search_engine
+
+    question_generator = LocalQuestionGen(
+    llm=llm,
+    context_builder=context_builder,
+    token_encoder=token_encoder,
+    llm_params=reduce_llm_params,
+    context_builder_params=context_builder_params,
+    )
+
+    return (search_engine, question_generator)
 
 def setup_local_search():
     entities = read_indexer_entities(entity_df, entity_embedding_df, COMMUNITY_LEVEL)
@@ -186,43 +197,57 @@ def setup_local_search():
         token_encoder=token_encoder,
     )
 
+    llm_params={
+        "max_tokens": 2_000,
+        "temperature": 0.0,
+    }
+    context_builder_params={
+        "text_unit_prop": 0.5,
+        "community_prop": 0.1,
+        "conversation_history_max_turns": 5,
+        "conversation_history_user_turns_only": True,
+        "top_k_mapped_entities": 10,
+        "top_k_relationships": 10,
+        "include_entity_rank": True,
+        "include_relationship_weight": True,
+        "include_community_rank": False,
+        "return_candidate_context": False,
+        "embedding_vectorstore_key": EntityVectorStoreKey.ID,
+        "max_tokens": 12_000,
+    }
+
     search_engine = LocalSearch(
         llm=llm,
         context_builder=context_builder,
         token_encoder=token_encoder,
-        llm_params={
-            "max_tokens": 2_000,
-            "temperature": 0.0,
-        },
-        context_builder_params={
-            "text_unit_prop": 0.5,
-            "community_prop": 0.1,
-            "conversation_history_max_turns": 5,
-            "conversation_history_user_turns_only": True,
-            "top_k_mapped_entities": 10,
-            "top_k_relationships": 10,
-            "include_entity_rank": True,
-            "include_relationship_weight": True,
-            "include_community_rank": False,
-            "return_candidate_context": False,
-            "embedding_vectorstore_key": EntityVectorStoreKey.ID,
-            "max_tokens": 12_000,
-        },
+        llm_params=llm_params,
+        context_builder_params=context_builder_params,
         response_type="single paragraph",
     )
-    return search_engine
 
-global_search_engine = setup_global_search()
-local_search_engine = setup_local_search()
+    question_generator = LocalQuestionGen(
+    llm=llm,
+    context_builder=context_builder,
+    token_encoder=token_encoder,
+    llm_params=llm_params,
+    context_builder_params=context_builder_params,
+    )
+
+    return (search_engine, question_generator)
+
+global_search_engine, global_question_generator = setup_global_search()
+local_search_engine, local_question_generator = setup_local_search()
 
 @app.get("/search/global")
 async def global_search(query: str = Query(..., description="Search query for global context")):
     try:
         result = await global_search_engine.asearch(query)        
+        candidate_questions = await global_question_generator.agenerate([query], result.context_data, 3)        
         response_dict = {
             "response": convert_response_to_string(result.response),
             "context_data": process_context_data(result.context_data),
             "context_text": result.context_text,
+            "candidate_questions": candidate_questions.response,
             "completion_time": result.completion_time,
             "llm_calls": result.llm_calls,
             "prompt_tokens": result.prompt_tokens,
@@ -237,11 +262,13 @@ async def global_search(query: str = Query(..., description="Search query for gl
 @app.get("/search/local")
 async def local_search(query: str = Query(..., description="Search query for local context")):
     try:
-        result = await local_search_engine.asearch(query)        
+        result = await local_search_engine.asearch(query)
+        candidate_questions = await local_question_generator.agenerate([query], result.context_data, 3)        
         response_dict = {
             "response": convert_response_to_string(result.response),
             "context_data": process_context_data(result.context_data),
             "context_text": result.context_text,
+            "candidate_questions": candidate_questions.response,
             "completion_time": result.completion_time,
             "llm_calls": result.llm_calls,
             "prompt_tokens": result.prompt_tokens,            
