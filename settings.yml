@@ -1,4 +1,4 @@
-GRAPHRAG_LLM_TYPE: azure_openai_chat # openai_chat or azure_openai_chat
+GRAPHRAG_LLM_TYPE: openai_chat
 GRAPHRAG_LLM_MODEL: gpt-4o
 GRAPHRAG_LLM_API_BASE: null
 GRAPHRAG_EMBEDDING_MODEL: text-embedding-3-small

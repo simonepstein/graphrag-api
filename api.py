@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import tiktoken
 import uvicorn
 
+from graphrag.query.question_gen.local_gen import LocalQuestionGen
 from graphrag.query.structured_search.global_search.search import GlobalSearch
 from graphrag.query.structured_search.local_search.search import LocalSearch
 from graphrag.query.structured_search.drift_search.search import DRIFTSearch
@@ -186,19 +187,60 @@ def setup_local_search() -> LocalSearch:
             "max_tokens": 12_000,
         },
         response_type=RESPONSE_TYPE,
+    )
+
+def setup_candidate_questions():
+    # copy from local search
+    context_builder = LocalSearchMixedContext(
+        community_reports=reports,
+        text_units=text_units,
+        entities=entities,
+        relationships=relationships,
+        covariates={"claims": claims} if CLAIM_EXTRACTION_ENABLED else None,
+        entity_text_embeddings=description_embedding_store,
+        embedding_vectorstore_key=EntityVectorStoreKey.ID,
+        text_embedder=text_embedder,
+        token_encoder=token_encoder,
+    )
+
+    return LocalQuestionGen(
+    llm=llm,
+    context_builder=context_builder,
+    token_encoder=token_encoder,
+    llm_params={
+            "max_tokens": 2_000,
+            "temperature": 0.0,
+    },
+    context_builder_params={
+            "text_unit_prop": 0.5,
+            "community_prop": 0.1,
+            "conversation_history_max_turns": 5,
+            "conversation_history_user_turns_only": True,
+            "top_k_mapped_entities": 10,
+            "top_k_relationships": 10,
+            "include_entity_rank": True,
+            "include_relationship_weight": True,
+            "include_community_rank": False,
+            "return_candidate_context": False,
+            "embedding_vectorstore_key": EntityVectorStoreKey.ID,
+            "max_tokens": 12_000,
+        },
     )    
 
 global_search_engine = setup_global_search()
 local_search_engine = setup_local_search()
 drift_search_engine = setup_drift_search()
+candidate_questions_engine = setup_candidate_questions()
 
 @app.get("/search/drift")
 async def drift_search(query: str = Query(..., description="DRIFT search query")):
     try:
         result = await drift_search_engine.asearch(query)
+        candidate_questions = await candidate_questions_engine.agenerate([query], process_context_data(result.context_data), 3)
         response_dict = {
             "response": convert_response_to_string(result.response["nodes"][0]["answer"]),
             "context_data": process_context_data(result.context_data),
+            "candidate_questions": candidate_questions.response,
             "context_text": result.context_text,
             "completion_time": result.completion_time,
             "llm_calls": result.llm_calls,
@@ -215,10 +257,13 @@ async def drift_search(query: str = Query(..., description="DRIFT search query")
 @app.get("/search/global")
 async def global_search(query: str = Query(..., description="Search query for global context")):
     try:
-        result = await global_search_engine.asearch(query)        
+        result = await global_search_engine.asearch(query)
+        candidate_questions = await candidate_questions_engine.agenerate([query], process_context_data(result.context_data), 3)
+
         response_dict = {
             "response": convert_response_to_string(result.response),
             "context_data": process_context_data(result.context_data),
+            "candidate_questions": candidate_questions.response,
             "context_text": result.context_text,
             "reduce_context_data": process_context_data(result.reduce_context_data),
             "reduce_context_text": result.reduce_context_text,
@@ -239,9 +284,12 @@ async def global_search(query: str = Query(..., description="Search query for gl
 async def local_search(query: str = Query(..., description="Search query for local context")):
     try:
         result = await local_search_engine.asearch(query)        
+        candidate_questions = await candidate_questions_engine.agenerate([query], process_context_data(result.context_data), 3)
+
         response_dict = {
             "response": convert_response_to_string(result.response),
             "context_data": process_context_data(result.context_data),
+            "candidate_questions": candidate_questions.response,
             "context_text": result.context_text,
             "completion_time": result.completion_time,
             "llm_calls": result.llm_calls,
